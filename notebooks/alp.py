@@ -220,3 +220,101 @@ for epoch in range(1, NUM_EPOCHS + 1):
 
 print("🏆 [SUCCESS] Adversarial Training Complete. The Baseline is forged.")
 
+
+
+
+# ==============================================================================
+# EMERGENCY OVERRIDE: VRAM SAFETY & 20-EPOCH SPRINT
+# ==============================================================================
+import gc
+
+# 1. PURGE THE VRAM (Clear the ghosts of the crashed tensors)
+torch.cuda.empty_cache()
+gc.collect()
+
+# 2. RESTORE CUDNN (Allow it to find the fastest algorithm for the NEW smaller batch)
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.deterministic = False
+
+print("🧹 [SYSTEM] VRAM Purged. cuDNN Profiler Restored.")
+
+# 3. THE SAFETY BATCH (Drop to 64 to guarantee it fits in the cuDNN workspace)
+train_loader = DataLoader(
+    datasets.CIFAR10('./data', train=True, download=True, transform=transform_train), 
+    batch_size=64, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
+)
+print("📦 [SYSTEM] DataLoader rebuilt: Batch Size 64.")
+
+# 4. RE-INITIALIZE MODEL & OPTIMIZER (To clear any corrupted states)
+classifier = models.resnet50(weights=None)
+classifier.fc = nn.Linear(classifier.fc.in_features, 10)
+classifier = classifier.to(DEVICE)
+
+optimizer = optim.SGD(classifier.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4, nesterov=True)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20) # 20-Epoch Sprint!
+criterion = nn.CrossEntropyLoss()
+
+# 5. THE CRASH-PROOF PGD ATTACK
+def pgd_attack_safe(model, x, y, eps=8/255, alpha=3/255, iters=3):
+    model.eval() 
+    noise = torch.zeros_like(x).uniform_(-eps, eps)
+    x_adv = torch.clamp(x + noise, 0, 1).detach()
+    
+    for _ in range(iters):
+        x_adv.requires_grad_(True)
+        x_adv_c = x_adv.contiguous() 
+        
+        with torch.enable_grad():
+            output = model(x_adv_c)
+            loss = criterion(output, y)
+            
+        grad = torch.autograd.grad(loss, x_adv_c, retain_graph=False, create_graph=False)[0]
+        
+        with torch.no_grad():
+            x_adv = x_adv + alpha * grad.sign()
+            eta = torch.clamp(x_adv - x, min=-eps, max=eps)
+            x_adv = torch.clamp(x + eta, min=0, max=1).detach()
+            
+    return x_adv.detach()
+
+# 6. THE 20-EPOCH SPRINT LOOP
+print("\n" + "=" * 60)
+print(f"🔥 [IGNITION] Starting 20-Epoch SAFE SPRINT on {DEVICE}")
+print("=" * 60)
+
+start_time = time.time()
+for epoch in range(1, 21):
+    classifier.train()
+    running_loss = 0.0
+    
+    loop = tqdm(train_loader, desc=f"Epoch [{epoch:02d}/20]", leave=True)
+    for images, labels in loop:
+        images = images.to(DEVICE, dtype=torch.float32, non_blocking=True)
+        labels = labels.to(DEVICE, non_blocking=True)
+
+        adv_images = pgd_attack_safe(classifier, images, labels)
+
+        classifier.train()
+        optimizer.zero_grad(set_to_none=True)
+        
+        outputs = classifier(adv_images.contiguous())
+        loss = criterion(outputs, labels)
+        loss.backward()
+        
+        torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=1.0)
+        optimizer.step()
+
+        running_loss += loss.item()
+        loop.set_postfix(loss=f"{loss.item():.4f}")
+
+    scheduler.step()
+    
+    # Save a checkpoint every 5 epochs just to be paranoid
+    if epoch % 5 == 0:
+        ckpt_path = os.path.join(SAVE_DIR, f"resnet50_SAFE_epoch_{epoch}.pth")
+        torch.save(classifier.state_dict(), ckpt_path)
+
+# FINAL SAVE
+final_path = os.path.join(SAVE_DIR, "resnet50_SAFE_FINAL.pth")
+torch.save(classifier.state_dict(), final_path)
+print(f"\n🏆 [MISSION ACCOMPLISHED] Baseline forged in {(time.time()-start_time)/60:.2f} mins.")
