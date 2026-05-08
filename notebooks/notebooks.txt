@@ -1,1 +1,21 @@
-Placeholder
+Defaulting to user installation because normal site-packages is not writeable
+Looking in indexes: https://pypi.org/simple, https://pypi.ngc.nvidia.com
+Requirement already satisfied: tqdm in /opt/anaconda3/envs/310/lib/python3.10/site-packages (4.67.1)
+🔥 [IGNITION] Starting 50 Epochs of AT on V100s. Deadline: 4:00 PM.
+/tmp/ipykernel_3158/713613478.py:24: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler() # For Mixed Precision
+---------------------------------------------------------------------------
+TypeError                                 Traceback (most recent call last)
+Cell In[7], line 70
+     67     print(f"🏆 [MISSION SUCCESS] Final model saved. Total Time: {(time.time()-start_time)/60:.2f} mins")
+     69 # LAUNCH THE ENGINE
+---> 70 run_adversarial_training()
+
+Cell In[7], line 38, in run_adversarial_training(epochs)
+     35 total_loss = 0
+     37 # tqdm for visual feedback
+---> 38 pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
+     39 for data, target in pbar:
+     40     data, target = data.to(device), target.to(device)
+
+TypeError: 'module' object is not callable
