@@ -1,27 +1,19 @@
 =================================================================
   PGD-3 Adversarial Training  |  ResNet-50  |  CIFAR-10
-  Epochs: 50  |  ε=0.0314  |  α=0.0118  |  steps=3
+  Epochs=50  ε=0.0314  α=0.0118  steps=3
+  Attack path : pure CUDA (cuDNN disabled)
+  Train  path : cuDNN enabled (benchmark=False, deterministic=True)
 =================================================================
 
 Epoch [01/50]:   0%|                                                                           | 0/1562 [00:00<?, ?it/s]
 ---------------------------------------------------------------------------
 RuntimeError                              Traceback (most recent call last)
-Cell In[20], line 155
-    152 labels = labels.to(DEVICE, non_blocking=True)
-    154 # ── 1. Generate adversarial examples ──────────────────────────────
---> 155 adv_images = pgd_attack(classifier, images, labels)
-    156 # adv_images is already: detached · cloned · contiguous · float32
-    157 # No further surgery needed before the training forward pass.
-    158 
-    159 # ── 2. Training step on adversarial examples ──────────────────────
-    160 classifier.train()                          # guaranteed train mode
-
-Cell In[20], line 102, in pgd_attack(model, x, y, eps, alpha, steps)
-     99 x_adv.requires_grad_(True)
-    101 with torch.enable_grad():
---> 102     output = model(x_adv)
-    103     loss   = criterion(output, y)
-    105 # Gradient only w.r.t. x_adv — model weights untouched
+Cell In[22], line 182
+    179 classifier.train()
+    180 optimizer.zero_grad(set_to_none=True)
+--> 182 outputs = classifier(adv_images)          # cuDNN-accelerated
+    183 loss    = criterion(outputs, labels)
+    184 loss.backward()
 
 File ~/.local/lib/python3.10/site-packages/torch/nn/modules/module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
    1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
