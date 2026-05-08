@@ -87,7 +87,7 @@ import time
 
 # 1. HARDWARE & OPTIMIZATION SETTINGS
 device = torch.device("cuda")
-torch.backends.cudnn.benchmark = True # Howard: "The Speed Booster!"
+torch.backends.cudnn.benchmark = False
 SAVE_DIR = "Paper2_V100_Results"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -102,7 +102,7 @@ transform_train = transforms.Compose([
 # Jeff Dean: "Increasing batch_size to 512 to saturate the V100s cores"
 train_loader = DataLoader(
     datasets.CIFAR10('./data', train=True, download=True, transform=transform_train), 
-    batch_size=512, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
+    batch_size=256, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
 )
 
 # 3. THE MODEL
@@ -116,22 +116,29 @@ scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50)
 criterion = nn.CrossEntropyLoss()
 scaler = torch.amp.GradScaler('cuda') # FIXED: 2026 syntax
 
-# 5. OPTIMIZED ATTACK (3-step PGD for training speed)
+
+# 5. OPTIMIZED ATTACK (Pure FP32 for Stability)
 def pgd_attack_fast(model, x, y, eps=8/255, alpha=3/255, iters=3):
     model.eval()
-    x_adv = x.clone().detach() + torch.zeros_like(x).uniform_(-eps, eps)
+    # Cleaner initialization
+    x_adv = x.clone().detach() + torch.empty_like(x).uniform_(-eps, eps)
     x_adv = torch.clamp(x_adv, 0, 1)
     
     for _ in range(iters):
         x_adv.requires_grad = True
-        with torch.amp.autocast('cuda'): # Faster
-            output = model(x_adv)
-            loss = criterion(output, y)
+        
+        # THE FIX: Removed autocast here! Attacks need FP32 precision to avoid underflow!
+        output = model(x_adv)
+        loss = criterion(output, y)
+        
         grad = torch.autograd.grad(loss, x_adv)[0]
-        x_adv = x_adv.detach() + alpha * grad.sign()
-        x_adv = torch.min(torch.max(x_adv, x - eps), x + eps)
-        x_adv = torch.clamp(x_adv, 0, 1)
-    return x_adv
+        
+        with torch.no_grad():
+            x_adv = x_adv + alpha * grad.sign()
+            eta = torch.clamp(x_adv - x, min=-eps, max=eps)
+            x_adv = torch.clamp(x + eta, min=0, max=1)
+            
+    return x_adv.detach()
 
 # 6. THE HEARTBEAT TRAINING LOOP
 print(f"🔥 [SUPERSONIC] Starting 50 Epochs. Target: 4:00 PM. VRAM: 32GB Ready.")
