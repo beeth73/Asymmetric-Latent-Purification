@@ -287,3 +287,160 @@ for epoch in range(1, NUM_EPOCHS + 1):
 print("=" * 65)
 print("  ✅  Adversarial Training Complete.")
 print("=" * 65)
+
+
+
+# =============================================================================
+# CELL 5 — GATE 1: SANITY BASELINES & ROBUSTNESS VERIFICATION
+# =============================================================================
+#
+# BUGS FIXED vs original:
+#
+# Bug 1 — dtype not set on images.to(DEVICE)
+#   Original:  images.to(DEVICE)
+#   Fixed:     images.to(DEVICE, dtype=torch.float32)
+#   Why:       With cudnn.enabled=False the ATen CUDA path is strict about
+#              dtype. A uint8 or float16 tensor from pin_memory will crash
+#              at conv1 with a dtype mismatch error.
+#
+# Bug 2 — model never restored to train() after eval()
+#   Original:  model.eval() called at top, no model.train() at end
+#   Fixed:     classifier.train() called after all evaluation is done
+#   Why:       If Cell 6 (or any subsequent cell) runs without re-training
+#              setup, the model is stuck in eval() mode. BatchNorm will use
+#              running stats instead of batch stats, silently degrading results.
+#
+# Bug 3 — sample count mismatch (comment said 1,024, code gave 512)
+#   Original:  if i >= 4: break  → 4 batches × 128 = 512 images
+#   Fixed:     if i >= 8: break  → 8 batches × 128 = 1,024 images
+#   Why:       The comment said "~1024 images" but the break fired after 4
+#              batches (batch_size=128 → 512 images). Fixed to 8 batches.
+#
+# Bug 4 — PGD eval parameters produce weak adversary
+#   Original:  eps=8/255, alpha=2/255, steps=20
+#   Fixed:     eps=8/255, alpha=2/255, steps=50
+#   Why:       alpha=2/255 with only 20 steps gives the adversary just
+#              20 × 2/255 = 40/255 of total movement budget. With 50 steps
+#              it reaches 100/255, meaningfully exploring the epsilon ball.
+#              The standard strong PGD eval in AT literature uses 50 steps.
+#              alpha=2/255 = eps/4 is the correct step size for PGD eval.
+#
+# Bug 5 — gate thresholds are only valid for final checkpoint
+#   Original:  clean > 80 AND robust > 35 as a hard gate
+#   Fixed:     Thresholds made checkpoint-aware. Mid-training evals (e.g.
+#              after epoch 10) will legitimately fail the original gate even
+#              with a healthy training run. Added epoch parameter.
+# =============================================================================
+
+import torch
+import torch.nn.functional as F
+from tqdm import tqdm
+
+def verify_baseline(model, loader, checkpoint_epoch=50,
+                    eps=8/255, alpha=2/255, steps=50,
+                    n_batches=8):
+    """
+    Gate 1 robustness evaluation.
+
+    Args:
+        model            : trained classifier (will be restored to train() after eval)
+        loader           : test DataLoader
+        checkpoint_epoch : which epoch this checkpoint is from (adjusts thresholds)
+        eps              : PGD epsilon (default 8/255 — CIFAR-10 standard)
+        alpha            : PGD step size (default 2/255 = eps/4 — standard eval)
+        steps            : PGD iterations (default 50 — strong eval)
+        n_batches        : number of batches to evaluate (~n_batches × batch_size images)
+    """
+
+    model.eval()
+
+    clean_correct  = 0
+    robust_correct = 0
+    total          = 0
+
+    # Threshold scaling: full convergence only at epoch 50.
+    # Linearly interpolate targets so mid-training gates are fair.
+    frac             = min(checkpoint_epoch / 50.0, 1.0)
+    clean_threshold  = 60 + frac * 22   # 60% at ep1 → 82% at ep50
+    robust_threshold = 15 + frac * 25   # 15% at ep1 → 40% at ep50
+
+    print(f"\n{'='*55}")
+    print(f"  Gate 1 — Robustness Evaluation")
+    print(f"  Checkpoint epoch : {checkpoint_epoch}/50")
+    print(f"  PGD config       : eps={eps:.4f}  alpha={alpha:.4f}  steps={steps}")
+    print(f"  Evaluating on    : ~{n_batches * loader.batch_size} test images")
+    print(f"  Targets          : clean>{clean_threshold:.0f}%  robust>{robust_threshold:.0f}%")
+    print(f"{'='*55}\n")
+
+    for i, (images, labels) in enumerate(tqdm(loader, desc="Evaluating")):
+        if i >= n_batches:
+            break
+
+        # BUG 1 FIX: explicit float32 cast — required with cudnn.enabled=False
+        images = images.to(DEVICE, dtype=torch.float32, non_blocking=True)
+        labels = labels.to(DEVICE, non_blocking=True)
+        batch_size = images.size(0)
+
+        # ── Clean accuracy ────────────────────────────────────────────────
+        with torch.no_grad():
+            outputs = model(images)
+            clean_correct += (outputs.argmax(1) == labels).sum().item()
+
+        # ── Robust accuracy (PGD-50) ──────────────────────────────────────
+        # pgd_attack already handles model.eval()/model.train() internally,
+        # but we are already in eval() so it's a no-op flip. Safe.
+        adv_images = pgd_attack(model, images, labels,
+                                eps=eps, alpha=alpha, steps=steps)
+        with torch.no_grad():
+            adv_outputs = model(adv_images)
+            robust_correct += (adv_outputs.argmax(1) == labels).sum().item()
+
+        total += batch_size
+
+    clean_acc  = 100.0 * clean_correct  / total
+    robust_acc = 100.0 * robust_correct / total
+
+    print(f"\n{'='*55}")
+    print(f"  Results")
+    print(f"{'='*55}")
+    print(f"  Clean  Accuracy : {clean_acc:.2f}%  (target >{clean_threshold:.0f}%)")
+    print(f"  Robust Accuracy : {robust_acc:.2f}%  (target >{robust_threshold:.0f}%)")
+    print(f"  Evaluated on    : {total} images")
+    print(f"{'='*55}")
+
+    clean_pass  = clean_acc  > clean_threshold
+    robust_pass = robust_acc > robust_threshold
+
+    if clean_pass and robust_pass:
+        print(f"\n  ✅  GATE 1 PASSED — model is battle-hardened.")
+    elif not clean_pass and not robust_pass:
+        print(f"\n  ❌  GATE 1 FAILED — both metrics below target.")
+        print(f"      Check: learning rate schedule, data normalisation,")
+        print(f"      batch size, and whether epoch {checkpoint_epoch} is too early.")
+    elif not clean_pass:
+        print(f"\n  ⚠️   GATE 1 PARTIAL — robust ok, clean accuracy low.")
+        print(f"      Possible cause: model over-fitted to adversarial examples.")
+        print(f"      Consider adding clean data to training mix.")
+    else:
+        print(f"\n  ⚠️   GATE 1 PARTIAL — clean ok, robust accuracy low.")
+        print(f"      Possible cause: PGD-3 training attack too weak.")
+        print(f"      Consider increasing attack steps or epsilon.")
+
+    # BUG 2 FIX: restore model to train mode so subsequent cells work correctly
+    model.train()
+
+    return {"clean_acc": clean_acc, "robust_acc": robust_acc, "total": total}
+
+
+# =============================================================================
+# EXECUTE
+# After full 50-epoch training use checkpoint_epoch=50.
+# If running mid-training (e.g. from a saved checkpoint at epoch 10),
+# pass checkpoint_epoch=10 so the gate thresholds are appropriate.
+# =============================================================================
+
+results = verify_baseline(
+    classifier,
+    test_loader,
+    checkpoint_epoch=50,   # ← change to whichever epoch you loaded from
+)
