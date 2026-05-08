@@ -1,22 +1,25 @@
-===========================================================
-🔥 [IGNITION] Starting PGD-3 Adversarial Training on cuda
+🧹 [SYSTEM] VRAM Purged. cuDNN Profiler Restored.
+📦 [SYSTEM] DataLoader rebuilt: Batch Size 64.
+
 ============================================================
-Epoch [01/50]:   0%|                                                                            | 0/195 [00:00<?, ?it/s]
+🔥 [IGNITION] Starting 20-Epoch SAFE SPRINT on cuda
+============================================================
+Epoch [01/20]:   0%|                                                                            | 0/781 [00:00<?, ?it/s]
 ---------------------------------------------------------------------------
 RuntimeError                              Traceback (most recent call last)
-Cell In[14], line 21
-     18 labels = labels.to(DEVICE, non_blocking=True)
-     20 # 1. Generate Attack
----> 21 adv_images = pgd_attack_v100(classifier, images, labels)
-     23 # 2. Train on Attacked Images
-     24 classifier.train()
+Cell In[15], line 70
+     67 images = images.to(DEVICE, dtype=torch.float32, non_blocking=True)
+     68 labels = labels.to(DEVICE, non_blocking=True)
+---> 70 adv_images = pgd_attack_safe(classifier, images, labels)
+     72 classifier.train()
+     73 optimizer.zero_grad(set_to_none=True)
 
-Cell In[13], line 25, in pgd_attack_v100(model, images, labels, eps, alpha, steps)
-     22 adv_images.requires_grad_(True)
-     24 with torch.enable_grad():
----> 25     outputs = model(adv_images)
-     26     loss = criterion(outputs, labels)
-     28 grad = torch.autograd.grad(loss, adv_images, retain_graph=False, create_graph=False)[0]
+Cell In[15], line 43, in pgd_attack_safe(model, x, y, eps, alpha, iters)
+     40 x_adv_c = x_adv.contiguous() 
+     42 with torch.enable_grad():
+---> 43     output = model(x_adv_c)
+     44     loss = criterion(output, y)
+     46 grad = torch.autograd.grad(loss, x_adv_c, retain_graph=False, create_graph=False)[0]
 
 File ~/.local/lib/python3.10/site-packages/torch/nn/modules/module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
    1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
@@ -75,4 +78,4 @@ File ~/.local/lib/python3.10/site-packages/torch/nn/modules/conv.py:549, in Conv
     550     input, weight, bias, self.stride, self.padding, self.dilation, self.groups
     551 )
 
-RuntimeError: GET was unable to find an engine to execute this computation
+RuntimeError: FIND was unable to find an engine to execute this computation
