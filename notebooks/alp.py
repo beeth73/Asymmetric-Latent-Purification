@@ -74,247 +74,107 @@ classifier = get_resnet50_victim()
 print(f"🧠 [MODEL] ResNet-50 initialized. Parameters: {sum(p.numel() for p in classifier.parameters()):,}")
 
 
-# ==============================================================================
-# CELL 4A: HARDWARE STABILITY & DIRECTORY SETUP
-# ==============================================================================
+# Cell 4a
+
 import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.models as models
 from tqdm import tqdm
+import time
+import gc
 
-# 1. THE CUDNN CRASH FIX: Disable benchmarking to prevent dynamic-shape memory panics
+# 1. THE NUCLEAR OPTION: Disable the features that are causing the driver to crash
 torch.backends.cudnn.benchmark = False
-torch.backends.cudnn.deterministic = True 
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.enabled = True # We leave it on for training, but off for the attack
 
-# 2. HARDWARE LOCK
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"🚀 [SYSTEM] Hardware locked: {DEVICE}")
-if DEVICE.type == 'cuda':
-    print(f"🚀 [SYSTEM] GPU: {torch.cuda.get_device_name(0)}")
+# 2. VRAM PURGE
+torch.cuda.empty_cache()
+gc.collect()
 
-# 3. DIRECTORY SETUP
+DEVICE = torch.device("cuda")
 SAVE_DIR = "./Paper2_V100_Results"
 os.makedirs(SAVE_DIR, exist_ok=True)
-print(f"📁 [SYSTEM] Checkpoint directory secured at: {SAVE_DIR}")
 
-# ==============================================================================
-# CELL 4B: MODEL & OPTIMIZER INITIALIZATION
-# ==============================================================================
-print("🧠 [SYSTEM] Initializing ResNet-50 for CIFAR-10...")
+print(f"🛰️ [SYSTEM] Hardware Stabilized. Batch Size Target: 32. Mode: Atomic Safety.")
 
+# cell 4b
 # 1. THE MODEL
 classifier = models.resnet50(weights=None)
 classifier.fc = nn.Linear(classifier.fc.in_features, 10)
 classifier = classifier.to(DEVICE)
 
-# 2. LOSS, OPTIMIZER & SCHEDULER
+# 2. OPTIMIZATION
 criterion = nn.CrossEntropyLoss()
-# Using Nesterov momentum for slightly more stable convergence
-optimizer = optim.SGD(classifier.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4, nesterov=True)
+optimizer = optim.SGD(classifier.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
 
-# 50 Epochs is standard for a V100 run to get a strong baseline quickly
-NUM_EPOCHS = 50
-scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
+print("✅ [SUCCESS] Model and Optimizer Ready.")
 
-print("✅[SUCCESS] Model, Optimizer, and Scheduler Ready.")
-
-# ==============================================================================
-# CELL 4C: THE BULLETPROOF PGD-3 ATTACK ENGINE
-# ==============================================================================
-EPS = 8 / 255.0
-ALPHA = 3 / 255.0
-STEPS = 3
-
-def pgd_attack_v100(model, images, labels, eps=EPS, alpha=ALPHA, steps=STEPS):
-    # 1. Cast and pin inputs to memory
-    images = images.detach().clone().to(DEVICE, dtype=torch.float32)
-    labels = labels.detach().clone().to(DEVICE)
-
-    # 2. Initialize random noise within epsilon ball
-    delta = torch.empty_like(images).uniform_(-eps, eps).to(dtype=torch.float32)
-
-    # 3. Freeze BatchNorm stats during attack generation
+#cell 4c
+def pgd_attack_atomic(model, x, y, eps=8/255, alpha=3/255, iters=3):
     model.eval()
-
-    for _ in range(steps):
-        # CRITICAL FIX 1: .contiguous() prevents the 'FIND/GET engine' crash
-        adv_images = (images + delta).contiguous().to(dtype=torch.float32)
-        adv_images.requires_grad_(True)
-
-        with torch.enable_grad():
-            outputs = model(adv_images)
-            loss = criterion(outputs, labels)
-
-        grad = torch.autograd.grad(loss, adv_images, retain_graph=False, create_graph=False)[0]
-
-        with torch.no_grad():
-            delta = delta + alpha * grad.sign()
-            # Keep delta inside the epsilon bounds
-            delta = torch.clamp(delta, -eps, eps)
-            
-            # CRITICAL FIX 2: We DO NOT clamp (images + delta) to [0,1] here 
-            # because your DataLoader already normalized the images to negative values!
-            delta = delta.contiguous()
-
-    model.train() # Restore train mode
     
-    # Final continuous tensor ready for the real forward pass
-    adv_images = (images + delta).detach().contiguous().to(dtype=torch.float32)
-    return adv_images
-
-print("⚔️ [SUCCESS] PGD-3 Attack Engine Loaded. Math verified.")
-
-# ==============================================================================
-# CELL 4D: THE TRAINING LOOP
-# ==============================================================================
-print("\n" + "=" * 60)
-print(f"🔥 [IGNITION] Starting PGD-3 Adversarial Training on {DEVICE}")
-print("=" * 60)
-
-for epoch in range(1, NUM_EPOCHS + 1):
-    classifier.train()
-    running_loss = 0.0
-    total_batches = 0
-
-    # TQDM Progress bar
-    loop = tqdm(train_loader, desc=f"Epoch [{epoch:02d}/{NUM_EPOCHS}]", leave=True)
-
-    for images, labels in loop:
-        images = images.to(DEVICE, dtype=torch.float32, non_blocking=True)
-        labels = labels.to(DEVICE, non_blocking=True)
-
-        # 1. Generate Attack
-        adv_images = pgd_attack_v100(classifier, images, labels)
-
-        # 2. Train on Attacked Images
-        classifier.train()
-        optimizer.zero_grad(set_to_none=True) # Memory optimization
-
-        # 3. Forward Pass (Forced contiguous to prevent C++ crashes)
-        outputs = classifier(adv_images.contiguous())
-        loss = criterion(outputs, labels)
-        
-        # 4. Backward Pass
-        loss.backward()
-
-        # 5. SAFETY NET: Gradient Clipping to prevent math explosions
-        torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=1.0)
-        optimizer.step()
-
-        # Bookkeeping
-        running_loss += loss.item()
-        total_batches += 1
-        loop.set_postfix(loss=f"{loss.item():.4f}", lr=f"{scheduler.get_last_lr()[0]:.5f}")
-
-    scheduler.step()
-    avg_loss = running_loss / total_batches
-    print(f"  → Epoch {epoch:02d} complete | Avg Loss: {avg_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.6f}")
-
-    # Checkpoint every 10 epochs
-    if epoch % 10 == 0:
-        ckpt_path = os.path.join(SAVE_DIR, f"resnet50_at_epoch_{epoch}.pth")
-        torch.save(classifier.state_dict(), ckpt_path)
-        print(f"  💾 [CHECKPOINT] Saved → {ckpt_path}")
-
-print("🏆 [SUCCESS] Adversarial Training Complete. The Baseline is forged.")
-
-
-
-
-# ==============================================================================
-# EMERGENCY OVERRIDE: VRAM SAFETY & 20-EPOCH SPRINT
-# ==============================================================================
-import gc
-
-# 1. PURGE THE VRAM (Clear the ghosts of the crashed tensors)
-torch.cuda.empty_cache()
-gc.collect()
-
-# 2. RESTORE CUDNN (Allow it to find the fastest algorithm for the NEW smaller batch)
-torch.backends.cudnn.benchmark = True
-torch.backends.cudnn.deterministic = False
-
-print("🧹 [SYSTEM] VRAM Purged. cuDNN Profiler Restored.")
-
-# 3. THE SAFETY BATCH (Drop to 64 to guarantee it fits in the cuDNN workspace)
-train_loader = DataLoader(
-    datasets.CIFAR10('./data', train=True, download=True, transform=transform_train), 
-    batch_size=64, shuffle=True, num_workers=4, pin_memory=True, drop_last=True
-)
-print("📦 [SYSTEM] DataLoader rebuilt: Batch Size 64.")
-
-# 4. RE-INITIALIZE MODEL & OPTIMIZER (To clear any corrupted states)
-classifier = models.resnet50(weights=None)
-classifier.fc = nn.Linear(classifier.fc.in_features, 10)
-classifier = classifier.to(DEVICE)
-
-optimizer = optim.SGD(classifier.parameters(), lr=0.1, momentum=0.9, weight_decay=5e-4, nesterov=True)
-scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20) # 20-Epoch Sprint!
-criterion = nn.CrossEntropyLoss()
-
-# 5. THE CRASH-PROOF PGD ATTACK
-def pgd_attack_safe(model, x, y, eps=8/255, alpha=3/255, iters=3):
-    model.eval() 
-    noise = torch.zeros_like(x).uniform_(-eps, eps)
-    x_adv = torch.clamp(x + noise, 0, 1).detach()
+    # We move the image to a 'detached' state to keep the graph simple
+    x_adv = x.clone().detach() + torch.zeros_like(x).uniform_(-eps, eps)
+    x_adv = torch.clamp(x_adv, 0, 1)
     
-    for _ in range(iters):
-        x_adv.requires_grad_(True)
-        x_adv_c = x_adv.contiguous() 
-        
-        with torch.enable_grad():
-            output = model(x_adv_c)
+    # Howard: "We use a context manager to ensure cuDNN doesn't try anything clever"
+    with torch.backends.cudnn.flags(enabled=False): # Bypasses the 'FIND engine' error!
+        for _ in range(iters):
+            x_adv.requires_grad = True
+            output = model(x_adv)
             loss = criterion(output, y)
             
-        grad = torch.autograd.grad(loss, x_adv_c, retain_graph=False, create_graph=False)[0]
-        
-        with torch.no_grad():
-            x_adv = x_adv + alpha * grad.sign()
-            eta = torch.clamp(x_adv - x, min=-eps, max=eps)
-            x_adv = torch.clamp(x + eta, min=0, max=1).detach()
+            grad = torch.autograd.grad(loss, x_adv)[0]
             
-    return x_adv.detach()
+            with torch.no_grad():
+                x_adv = x_adv + alpha * grad.sign()
+                eta = torch.clamp(x_adv - x, min=-eps, max=eps)
+                x_adv = torch.clamp(x + eta, min=0, max=1).detach()
+                
+    return x_adv
 
-# 6. THE 20-EPOCH SPRINT LOOP
-print("\n" + "=" * 60)
-print(f"🔥 [IGNITION] Starting 20-Epoch SAFE SPRINT on {DEVICE}")
-print("=" * 60)
+print("🛡️ [SUCCESS] Atomic Attacker Ready. cuDNN-Bypass active.")
 
-start_time = time.time()
+#cell 4D
+# Rebuild loader with Batch Size 32 for maximum VRAM safety
+train_loader = torch.utils.data.DataLoader(
+    train_set, batch_size=32, shuffle=True, num_workers=2, drop_last=True
+)
+
+print(f"🔥 [IGNITION] Starting 20-Epoch Sprint. Batch Size: 32.")
+
 for epoch in range(1, 21):
     classifier.train()
-    running_loss = 0.0
+    epoch_loss = 0.0
     
-    loop = tqdm(train_loader, desc=f"Epoch [{epoch:02d}/20]", leave=True)
-    for images, labels in loop:
-        images = images.to(DEVICE, dtype=torch.float32, non_blocking=True)
-        labels = labels.to(DEVICE, non_blocking=True)
+    pbar = tqdm(train_loader, desc=f"Epoch [{epoch:02d}/20]")
+    for images, labels in pbar:
+        images, labels = images.to(DEVICE), labels.to(DEVICE)
 
-        adv_images = pgd_attack_safe(classifier, images, labels)
+        # 1. Generate Attack using the Atomic (cuDNN-bypass) method
+        adv_images = pgd_attack_atomic(classifier, images, labels)
 
+        # 2. Train (cuDNN enabled here for speed, batch size 32 is safe)
         classifier.train()
-        optimizer.zero_grad(set_to_none=True)
-        
-        outputs = classifier(adv_images.contiguous())
+        optimizer.zero_grad()
+        outputs = classifier(adv_images)
         loss = criterion(outputs, labels)
         loss.backward()
         
         torch.nn.utils.clip_grad_norm_(classifier.parameters(), max_norm=1.0)
         optimizer.step()
 
-        running_loss += loss.item()
-        loop.set_postfix(loss=f"{loss.item():.4f}")
+        epoch_loss += loss.item()
+        pbar.set_postfix(loss=f"{loss.item():.4f}")
 
     scheduler.step()
-    
-    # Save a checkpoint every 5 epochs just to be paranoid
-    if epoch % 5 == 0:
-        ckpt_path = os.path.join(SAVE_DIR, f"resnet50_SAFE_epoch_{epoch}.pth")
-        torch.save(classifier.state_dict(), ckpt_path)
+    print(f"✅ Epoch {epoch} complete. Avg Loss: {epoch_loss/len(train_loader):.4f}")
 
-# FINAL SAVE
-final_path = os.path.join(SAVE_DIR, "resnet50_SAFE_FINAL.pth")
-torch.save(classifier.state_dict(), final_path)
-print(f"\n🏆 [MISSION ACCOMPLISHED] Baseline forged in {(time.time()-start_time)/60:.2f} mins.")
+    if epoch % 5 == 0:
+        torch.save(classifier.state_dict(), os.path.join(SAVE_DIR, f"resnet50_V100_final.pth"))
+
+print("🏆 MISSION COMPLETE.")
