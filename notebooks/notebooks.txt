@@ -1,21 +1,81 @@
-Defaulting to user installation because normal site-packages is not writeable
-Looking in indexes: https://pypi.org/simple, https://pypi.ngc.nvidia.com
-Requirement already satisfied: tqdm in /opt/anaconda3/envs/310/lib/python3.10/site-packages (4.67.1)
-🔥 [IGNITION] Starting 50 Epochs of AT on V100s. Deadline: 4:00 PM.
-/tmp/ipykernel_3158/713613478.py:24: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
-  scaler = GradScaler() # For Mixed Precision
+🔥 [SUPERSONIC] Starting 50 Epochs. Target: 4:00 PM. VRAM: 32GB Ready.
+Epoch 1/50:   0%|                                                                                | 0/97 [00:02<?, ?it/s]
 ---------------------------------------------------------------------------
-TypeError                                 Traceback (most recent call last)
-Cell In[7], line 70
-     67     print(f"🏆 [MISSION SUCCESS] Final model saved. Total Time: {(time.time()-start_time)/60:.2f} mins")
-     69 # LAUNCH THE ENGINE
----> 70 run_adversarial_training()
+RuntimeError                              Traceback (most recent call last)
+Cell In[8], line 103
+    100     print(f"⏱️ Total Training Time: {(time.time()-start_time)/60:.2f} mins")
+    102 # EXECUTE
+--> 103 run_mission_critical_training()
 
-Cell In[7], line 38, in run_adversarial_training(epochs)
-     35 total_loss = 0
-     37 # tqdm for visual feedback
----> 38 pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}")
-     39 for data, target in pbar:
-     40     data, target = data.to(device), target.to(device)
+Cell In[8], line 74, in run_mission_critical_training(epochs)
+     71 data, target = data.to(device), target.to(device)
+     73 # Fast PGD-3 for training
+---> 74 data_adv = pgd_attack_fast(classifier, data, target)
+     76 optimizer.zero_grad()
+     77 with torch.amp.autocast('cuda'):
 
-TypeError: 'module' object is not callable
+Cell In[8], line 52, in pgd_attack_fast(model, x, y, eps, alpha, iters)
+     50 x_adv.requires_grad = True
+     51 with torch.amp.autocast('cuda'): # Faster
+---> 52     output = model(x_adv)
+     53     loss = criterion(output, y)
+     54 grad = torch.autograd.grad(loss, x_adv)[0]
+
+File ~/.local/lib/python3.10/site-packages/torch/nn/modules/module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1750 else:
+-> 1751     return self._call_impl(*args, **kwargs)
+
+File ~/.local/lib/python3.10/site-packages/torch/nn/modules/module.py:1762, in Module._call_impl(self, *args, **kwargs)
+   1757 # If we don't have any hooks, we want to skip the rest of the logic in
+   1758 # this function, and just call forward.
+   1759 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1760         or _global_backward_pre_hooks or _global_backward_hooks
+   1761         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1762     return forward_call(*args, **kwargs)
+   1764 result = None
+   1765 called_always_called_hooks = set()
+
+File ~/.local/lib/python3.10/site-packages/torchvision/models/resnet.py:285, in ResNet.forward(self, x)
+    284 def forward(self, x: Tensor) -> Tensor:
+--> 285     return self._forward_impl(x)
+
+File ~/.local/lib/python3.10/site-packages/torchvision/models/resnet.py:268, in ResNet._forward_impl(self, x)
+    266 def _forward_impl(self, x: Tensor) -> Tensor:
+    267     # See note [TorchScript super()]
+--> 268     x = self.conv1(x)
+    269     x = self.bn1(x)
+    270     x = self.relu(x)
+
+File ~/.local/lib/python3.10/site-packages/torch/nn/modules/module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
+   1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
+   1750 else:
+-> 1751     return self._call_impl(*args, **kwargs)
+
+File ~/.local/lib/python3.10/site-packages/torch/nn/modules/module.py:1762, in Module._call_impl(self, *args, **kwargs)
+   1757 # If we don't have any hooks, we want to skip the rest of the logic in
+   1758 # this function, and just call forward.
+   1759 if not (self._backward_hooks or self._backward_pre_hooks or self._forward_hooks or self._forward_pre_hooks
+   1760         or _global_backward_pre_hooks or _global_backward_hooks
+   1761         or _global_forward_hooks or _global_forward_pre_hooks):
+-> 1762     return forward_call(*args, **kwargs)
+   1764 result = None
+   1765 called_always_called_hooks = set()
+
+File ~/.local/lib/python3.10/site-packages/torch/nn/modules/conv.py:554, in Conv2d.forward(self, input)
+    553 def forward(self, input: Tensor) -> Tensor:
+--> 554     return self._conv_forward(input, self.weight, self.bias)
+
+File ~/.local/lib/python3.10/site-packages/torch/nn/modules/conv.py:549, in Conv2d._conv_forward(self, input, weight, bias)
+    537 if self.padding_mode != "zeros":
+    538     return F.conv2d(
+    539         F.pad(
+    540             input, self._reversed_padding_repeated_twice, mode=self.padding_mode
+   (...)
+    547         self.groups,
+    548     )
+--> 549 return F.conv2d(
+    550     input, weight, bias, self.stride, self.padding, self.dilation, self.groups
+    551 )
+
+RuntimeError: FIND was unable to find an engine to execute this computation
