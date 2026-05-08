@@ -1,25 +1,22 @@
-🔥 [SUPERSONIC] Starting 50 Epochs. Target: 4:00 PM. VRAM: 32GB Ready.
-Epoch 1/50:   0%|                                                                               | 0/195 [00:00<?, ?it/s]
+===========================================================
+🔥 [IGNITION] Starting PGD-3 Adversarial Training on cuda
+============================================================
+Epoch [01/50]:   0%|                                                                            | 0/195 [00:00<?, ?it/s]
 ---------------------------------------------------------------------------
 RuntimeError                              Traceback (most recent call last)
-Cell In[9], line 110
-    107     print(f"⏱️ Total Training Time: {(time.time()-start_time)/60:.2f} mins")
-    109 # EXECUTE
---> 110 run_mission_critical_training()
+Cell In[14], line 21
+     18 labels = labels.to(DEVICE, non_blocking=True)
+     20 # 1. Generate Attack
+---> 21 adv_images = pgd_attack_v100(classifier, images, labels)
+     23 # 2. Train on Attacked Images
+     24 classifier.train()
 
-Cell In[9], line 81, in run_mission_critical_training(epochs)
-     78 data, target = data.to(device), target.to(device)
-     80 # Fast PGD-3 for training
----> 81 data_adv = pgd_attack_fast(classifier, data, target)
-     83 optimizer.zero_grad()
-     84 with torch.amp.autocast('cuda'):
-
-Cell In[9], line 55, in pgd_attack_fast(model, x, y, eps, alpha, iters)
-     52 x_adv.requires_grad = True
-     54 # THE FIX: Removed autocast here! Attacks need FP32 precision to avoid underflow!
----> 55 output = model(x_adv)
-     56 loss = criterion(output, y)
-     58 grad = torch.autograd.grad(loss, x_adv)[0]
+Cell In[13], line 25, in pgd_attack_v100(model, images, labels, eps, alpha, steps)
+     22 adv_images.requires_grad_(True)
+     24 with torch.enable_grad():
+---> 25     outputs = model(adv_images)
+     26     loss = criterion(outputs, labels)
+     28 grad = torch.autograd.grad(loss, adv_images, retain_graph=False, create_graph=False)[0]
 
 File ~/.local/lib/python3.10/site-packages/torch/nn/modules/module.py:1751, in Module._wrapped_call_impl(self, *args, **kwargs)
    1749     return self._compiled_call_impl(*args, **kwargs)  # type: ignore[misc]
